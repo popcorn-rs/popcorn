@@ -8,7 +8,6 @@ pub mod memory;
 pub mod device;
 pub mod buffer;
 pub mod frameworks;
-pub mod lock;
 
 pub use backend::Backend;
 pub use hardware::Hardware;
