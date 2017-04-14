@@ -32,6 +32,8 @@ mod native_test {
                                                                          shape_b, b,
                                                                          shape_c, c).wait().unwrap();
 
+    let scr = shape_c.read().unwrap();
+    let cr = c.read().unwrap();
     let shape_c_vec = shape_c.native_memory(backend.device()).unwrap().try_as_slice::<usize>().unwrap();
     let c_vec = c.native_memory(backend.device()).unwrap().try_as_slice::<f32>().unwrap();
     println!("Shape: {:?}", &shape_c_vec);

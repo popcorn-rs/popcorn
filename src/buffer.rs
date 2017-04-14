@@ -2,7 +2,7 @@ use futures::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::mem;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, LockResult};
 use device::Device;
 
 use frameworks::native;
@@ -50,6 +50,7 @@ impl From<native::Error> for Error {
   fn from(err: native::Error) -> Error { Error::Native(err) }
 }
 
+#[derive(Debug)]
 pub struct Buffer<T: Copy + Sized + Send + 'static> {
   raw: Arc<RwLock<RawBuffer<T>>>
 }
@@ -145,6 +146,14 @@ impl<T: Send + Copy + Sized + 'static> Buffer<T> {
   pub fn new<D: Into<BufferDevice>>(dev: D, size: usize) -> Result<Buffer<T>, Error> {
     let raw = try!(RawBuffer::new(dev, size));
     Ok(raw.into())
+  }
+
+  pub fn read<'a>(&'a self) -> LockResult<RwLockReadGuard<'a, RawBuffer<T>>> {
+    self.raw.read()
+  }
+
+  pub fn write<'a>(&'a mut self) -> LockResult<RwLockWriteGuard<'a, RawBuffer<T>>> {
+    self.raw.write()
   }
 
   pub fn sync_from_vec<D: Into<BufferDevice>>(self, vec: Vec<T>, dev: D) -> Box<Future<Item=Buffer<T>,Error=Error>> {
