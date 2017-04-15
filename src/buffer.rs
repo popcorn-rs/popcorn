@@ -2,16 +2,11 @@ use futures::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::mem;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, LockResult};
+use std::ops::{Deref, DerefMut};
 use device::Device;
+use vault::{Vault, VaultAcquired};
 
 use frameworks::native;
-
-#[derive(Debug, Clone, Copy)]
-pub enum BufferSource {
-  #[cfg(feature = "native")]
-  Native
-}
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum BufferDevice {
@@ -40,6 +35,7 @@ pub enum Error {
   #[cfg(feature = "native")]
   Native(native::Error),
 
+  InvalidLock,
   InvalidRawBuffer,
   InvalidDevice,
   InvalidBroadcast
@@ -51,42 +47,47 @@ impl From<native::Error> for Error {
 }
 
 #[derive(Debug)]
+pub struct LockedBuffer<T: Copy + Sized + Send + 'static> {
+  raw: VaultAcquired<RawBuffer<T>>
+}
+
+#[derive(Debug)]
 pub struct Buffer<T: Copy + Sized + Send + 'static> {
-  raw: Arc<RwLock<RawBuffer<T>>>
+  raw: Vault<RawBuffer<T>>
 }
 
 #[derive(Debug)]
 pub struct RawBuffer<T: Copy + Sized + Send + 'static> {
   size: usize,
   copies: HashMap<BufferDevice, BufferMemory>,
-  latest_source: BufferSource,
+  latest_device: BufferDevice,
 
   _pd: PhantomData<T>,
+}
+
+impl<T: Send + Copy + Sized + 'static> Deref for LockedBuffer<T> {
+  type Target = RawBuffer<T>;
+
+  fn deref(&self) -> &RawBuffer<T> { &self.raw }
+}
+
+impl<T: Send + Copy + Sized + 'static> DerefMut for LockedBuffer<T> {
+  fn deref_mut(&mut self) -> &mut RawBuffer<T> { &mut self.raw }
 }
 
 impl<T: Send + Copy + Sized + 'static> RawBuffer<T> {
   pub fn new<D: Into<BufferDevice>>(dev: D, size: usize) -> Result<RawBuffer<T>, Error> {
     let bdev: BufferDevice = dev.into();
     let mut copies = HashMap::new();
-    let latest_source = Self::device_source(&bdev);
     let copy = try!(Self::alloc_on_device(&bdev, size * mem::size_of::<T>()));
-    copies.insert(bdev, copy);
+    copies.insert(bdev.clone(), copy);
 
     Ok(RawBuffer {
       size: size,
       copies: copies,
-      latest_source: latest_source,
+      latest_device: bdev,
       _pd: PhantomData
     })
-  }
-
-  pub fn source(&self) -> BufferSource { self.latest_source }
-
-  pub fn device_source(dev: &BufferDevice) -> BufferSource {
-    match *dev {
-      #[cfg(feature = "native")]
-      BufferDevice::Native(_) => BufferSource::Native,
-    }
   }
 
   fn alloc_on_device(dev: &BufferDevice, size: usize) -> Result<BufferMemory, Error> {
@@ -125,57 +126,20 @@ impl<T: Send + Copy + Sized + 'static> RawBuffer<T> {
   }
 }
 
-impl<T: Send + Copy + Sized + 'static> From<RawBuffer<T>> for Buffer<T> {
-  fn from(raw: RawBuffer<T>) -> Buffer<T> {
-    let arc = Arc::new(RwLock::new(raw));
-    Buffer {
-      raw: arc
-    }
-  }
-}
-
-impl<T: Send + Copy + Sized + 'static> From<Arc<RwLock<RawBuffer<T>>>> for Buffer<T> {
-  fn from(raw: Arc<RwLock<RawBuffer<T>>>) -> Buffer<T> {
-    Buffer {
-      raw: raw
-    }
-  }
-}
-
-impl<T: Send + Copy + Sized + 'static> Buffer<T> {
-  pub fn new<D: Into<BufferDevice>>(dev: D, size: usize) -> Result<Buffer<T>, Error> {
-    let raw = try!(RawBuffer::new(dev, size));
-    Ok(raw.into())
-  }
-
-  pub fn read<'a>(&'a self) -> LockResult<RwLockReadGuard<'a, RawBuffer<T>>> {
-    self.raw.read()
-  }
-
-  pub fn write<'a>(&'a mut self) -> LockResult<RwLockWriteGuard<'a, RawBuffer<T>>> {
-    self.raw.write()
-  }
-
-  pub fn sync_from_vec<D: Into<BufferDevice>>(self, vec: Vec<T>, dev: D) -> Box<Future<Item=Buffer<T>,Error=Error>> {
-    let bdev: BufferDevice = dev.into();
-    let copy = {
-      let mut raw = self.raw.write().unwrap();
-      raw.copies.remove(&bdev)
-    };
+impl<T: Send + Copy + Sized + 'static> LockedBuffer<T> {
+  pub fn sync_from_vec(mut self, vec: Vec<T>) -> Box<Future<Item=LockedBuffer<T>,Error=Error>> {
+    let dev = self.latest_device.clone();
+    let copy = self.copies.remove(&dev);
 
     match copy {
       Some(mem) => {
-        match bdev {
+        match dev {
           #[cfg(feature = "native")]
           BufferDevice::Native(ref dev) => {
             let BufferMemory::Native(m) = mem;
             let new_dev = BufferDevice::Native(dev.clone());
             Box::new(dev.sync_from_vec(m, vec).map(move |mem| {
-              {
-                let mut raw = self.raw.write().unwrap();
-                raw.latest_source = RawBuffer::<T>::device_source(&new_dev);
-                raw.copies.insert(new_dev, BufferMemory::Native(mem));
-              }
+              self.raw.copies.insert(new_dev, BufferMemory::Native(mem));
               self
             }).map_err(Error::Native))
           },
@@ -185,26 +149,19 @@ impl<T: Send + Copy + Sized + 'static> Buffer<T> {
     }
   }
 
-  pub fn sync_to_vec<D: Into<BufferDevice>>(self, dev: D) -> Box<Future<Item=(Buffer<T>, Vec<T>),Error=Error>> {
-    let bdev: BufferDevice = dev.into();
-    let copy = {
-      let mut raw = self.raw.write().unwrap();
-      raw.copies.remove(&bdev)
-    };
+  pub fn sync_to_vec(mut self) -> Box<Future<Item=Vec<T>,Error=Error>> {
+    let dev = self.latest_device.clone();
+    let copy = self.copies.remove(&dev);
     match copy {
       Some(mem) => {
-        match bdev {
+        match dev {
           #[cfg(feature = "native")]
           BufferDevice::Native(ref dev) => {
             let BufferMemory::Native(m) = mem;
             let new_dev = BufferDevice::Native(dev.clone());
             Box::new(dev.sync_to_vec(m).map(move |(mem, vec)| {
-              {
-                let mut raw = self.raw.write().unwrap();
-                raw.copies.insert(new_dev, BufferMemory::Native(mem));
-              }
-
-              (self, vec)
+              self.copies.insert(new_dev, BufferMemory::Native(mem));
+              vec
             }).map_err(Error::Native))
           },
         }
@@ -213,19 +170,30 @@ impl<T: Send + Copy + Sized + 'static> Buffer<T> {
     }
   }
 
-  pub fn sync(self, dev: &BufferDevice) -> Box<Future<Item=Buffer<T>,Error=Error>> {
-    let source = {
-      let raw = self.raw.read().unwrap();
-      raw.source()
-    };
-    match source {
+  pub fn sync<D: Into<BufferDevice>>(self, dev: D) -> Box<Future<Item=LockedBuffer<T>,Error=Error>> {
+    let bdev = dev.into();
+
+    match self.latest_device {
       #[cfg(feature = "native")]
-      BufferSource::Native => {
-        match *dev {
+      BufferDevice::Native(_) => {
+        match bdev {
           #[cfg(feature = "native")]
           BufferDevice::Native(_) => Box::new(Ok(self).into_future()),
         }
       },
     }
+  }
+}
+
+impl<T: Send + Copy + Sized + 'static> Buffer<T> {
+  pub fn new<D: Into<BufferDevice>>(dev: D, size: usize) -> Result<Buffer<T>, Error> {
+    let raw = try!(RawBuffer::new(dev, size));
+    Ok(Buffer { raw: raw.into() })
+  }
+
+  pub fn lock(&self) -> Box<Future<Item=LockedBuffer<T>,Error=Error>> {
+    Box::new(self.raw.acquire().map(|raw| LockedBuffer {
+      raw: raw
+    }).map_err(|_| Error::InvalidLock))
   }
 }
