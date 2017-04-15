@@ -23,7 +23,7 @@ impl<T: Send + Copy + 'static> Executable for Placeholder<T> {
 
   fn uid(&self) -> &Uuid { &self.uid }
   fn exec<'a>(&self, ctx: &'a mut Context) ->
-    Result<Box<Future<Item=Buffer<Self::Base>,Error=buffer::Error>>,Error> {
+    Result<Box<Future<Item=LockedBuffer<Self::Base>,Error=buffer::Error>>,Error> {
       ctx.get_input(self.uid())
     }
 }
@@ -37,8 +37,8 @@ mod test {
   #[test]
   fn test_placeholder_success() {
     let backend = native::Backend::default();
-    let buf: Result<Buffer<f32>, buffer::Error> = Buffer::new(backend.device(), 2).map(|b| {
-      b.sync_from_vec(vec![42.0, 32.1], backend.device()).wait().unwrap()
+    let buf = Buffer::<f32>::new(backend.device(), 2).unwrap().lock().and_then(|b| {
+      b.sync_from_vec(vec![42.0, 32.1])
     });
 
     let p = Placeholder::<f32>::new();
@@ -46,10 +46,9 @@ mod test {
     let mut ctx = exec::Context::new();
     ctx.set_input(p.uid(), buf);
 
-    let dev = backend.device().clone();
     let rv = p.exec(&mut ctx).unwrap().and_then(move |b| {
-      b.sync_to_vec(&dev)
-    }).map(|(_b, v)| v).wait().unwrap();
+      b.sync_to_vec()
+    }).map(|v| v).wait().unwrap();
 
     assert_eq!(rv, vec![42.0, 32.1]);
   }

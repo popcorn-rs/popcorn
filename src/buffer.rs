@@ -51,7 +51,7 @@ pub struct LockedBuffer<T: Copy + Sized + Send + 'static> {
   raw: VaultAcquired<RawBuffer<T>>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Buffer<T: Copy + Sized + Send + 'static> {
   raw: Vault<RawBuffer<T>>
 }

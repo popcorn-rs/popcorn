@@ -3,7 +3,7 @@ use std::any::Any;
 use futures::{Future, IntoFuture};
 use uuid::Uuid;
 
-pub use popcorn::buffer::{self, Buffer};
+pub use popcorn::buffer::{self, LockedBuffer};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Error {
@@ -20,7 +20,7 @@ pub trait Executable {
 
   fn uid(&self) -> &Uuid;
   fn exec<'a>(&self, ctx: &'a mut Context) ->
-    Result<Box<Future<Item=Buffer<Self::Base>,Error=buffer::Error>>,Error>;
+    Result<Box<Future<Item=LockedBuffer<Self::Base>,Error=buffer::Error>>,Error>;
 }
 
 impl Context {
@@ -31,10 +31,10 @@ impl Context {
   }
 
   pub fn set_input<Base: Send + Copy + 'static,
-  B: IntoFuture<Item=Buffer<Base>,Error=buffer::Error> + 'static>(&mut self,
+  B: IntoFuture<Item=LockedBuffer<Base>,Error=buffer::Error> + 'static>(&mut self,
                                                                   uid: &Uuid,
                                                                   buf: B) -> &mut Self {
-    let f: Box<Future<Item=Buffer<Base>,Error=buffer::Error>> = Box::new(buf.into_future());
+    let f: Box<Future<Item=LockedBuffer<Base>,Error=buffer::Error>> = Box::new(buf.into_future());
     let bf = Box::new(f) as Box<Any>;
     self.inputs.insert(uid.clone(), bf);
     self
@@ -42,9 +42,9 @@ impl Context {
 
   pub fn get_input<Base: Send + Copy + 'static>(&mut self,
                                                 uid: &Uuid) ->
-    Result<Box<Future<Item=Buffer<Base>,Error=buffer::Error>>,Error> {
+    Result<Box<Future<Item=LockedBuffer<Base>,Error=buffer::Error>>,Error> {
       self.inputs.remove(uid).map(|input| {
-        input.downcast::<Box<Future<Item=Buffer<Base>,Error=buffer::Error>>>().
+        input.downcast::<Box<Future<Item=LockedBuffer<Base>,Error=buffer::Error>>>().
           map(|x| *x).
           map_err(|_| Error::InvalidBufferType)
       }).unwrap_or_else(|| Err(Error::UnknownInput))

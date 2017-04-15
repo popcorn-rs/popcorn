@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::cell::UnsafeCell;
 use std::ops::{Drop, Deref, DerefMut};
+use std::clone::Clone;
 use futures::{Future, Poll, Async};
 use futures::task::{self, Task};
 use spin;
@@ -33,6 +34,14 @@ pub struct VaultAcquire<T> {
 #[derive(Debug)]
 pub struct VaultAcquired<T> {
   inner: Arc<Inner<T>>
+}
+
+impl<T> Clone for Vault<T> {
+  fn clone(&self) -> Self {
+    Vault {
+      inner: self.inner.clone()
+    }
+  }
 }
 
 impl<T> Vault<T> {
