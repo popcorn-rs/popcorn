@@ -5,27 +5,27 @@ use popcorn::frameworks::native::Framework;
 use popcorn::backend::Backend;
 use operation::*;
 use futures::Future;
-use popcorn::buffer::{Buffer, BufferDevice, Error};
+use popcorn::buffer::{LockedBuffer, Error};
 use std::fmt;
 
 pub use self::core_ops::*;
 
 impl<B: Backend<Framework>, T: Dot + fmt::Debug + Sync + Copy + Sized + Send + 'static> DotOperation<T> for B {
   fn bcast_dot(&self,
-               shape_a: Buffer<usize>,
-               a: Buffer<T>,
-               shape_b: Buffer<usize>,
-               b: Buffer<T>,
-               shape_c: Buffer<usize>,
-               c: Buffer<T>) ->
-    Box<Future<Item=(Buffer<usize>, Buffer<T>,
-                     Buffer<usize>, Buffer<T>,
-                     Buffer<usize>, Buffer<T>), Error=Error>> {
+               shape_a: LockedBuffer<usize>,
+               a: LockedBuffer<T>,
+               shape_b: LockedBuffer<usize>,
+               b: LockedBuffer<T>,
+               shape_c: LockedBuffer<usize>,
+               c: LockedBuffer<T>) ->
+    Box<Future<Item=(LockedBuffer<usize>, LockedBuffer<T>,
+                     LockedBuffer<usize>, LockedBuffer<T>,
+                     LockedBuffer<usize>, LockedBuffer<T>), Error=Error>> {
       // Step 1. Sync all input buffers to the required device
-      let bdev = BufferDevice::Native(self.device().clone());
-      let ar = shape_a.sync(&bdev).join(a.sync(&bdev));
-      let br = shape_b.sync(&bdev).join(b.sync(&bdev));
-      let cr = shape_c.sync(&bdev).join(c.sync(&bdev));
+      let dev = self.device();
+      let ar = shape_a.sync(dev).join(a.sync(dev));
+      let br = shape_b.sync(dev).join(b.sync(dev));
+      let cr = shape_c.sync(dev).join(c.sync(dev));
 
 
       // Step 2. Convert all memory to native memory and execute the
@@ -35,19 +35,12 @@ impl<B: Backend<Framework>, T: Dot + fmt::Debug + Sync + Copy + Sized + Send + '
       Box::new(ar.join(br).join(cr).and_then(move |(((shape_a, a), (shape_b, b)), (mut shape_c, mut c))| {
         pool.spawn_fn(move || {
           {
-            let sar = shape_a.read().unwrap();
-            let ar = a.read().unwrap();
-            let sbr = shape_b.read().unwrap();
-            let br = b.read().unwrap();
-            let mut scr = shape_c.write().unwrap();
-            let mut cr = c.write().unwrap();
-
-            let n_shape_a: &[usize] = try!(try!(sar.native_memory(&dev)).try_as_slice());
-            let n_a: &[T] = try!(try!(ar.native_memory(&dev)).try_as_slice());
-            let n_shape_b: &[usize] = try!(try!(sbr.native_memory(&dev)).try_as_slice());
-            let n_b: &[T] = try!(try!(br.native_memory(&dev)).try_as_slice());
-            let n_shape_c: &mut [usize] = try!(try!(scr.native_memory_mut(&dev)).try_as_mut_slice());
-            let n_c: &mut [T] = try!(try!(cr.native_memory_mut(&dev)).try_as_mut_slice());
+            let n_shape_a: &[usize] = try!(try!(shape_a.native_memory(&dev)).try_as_slice());
+            let n_a: &[T] = try!(try!(a.native_memory(&dev)).try_as_slice());
+            let n_shape_b: &[usize] = try!(try!(shape_b.native_memory(&dev)).try_as_slice());
+            let n_b: &[T] = try!(try!(b.native_memory(&dev)).try_as_slice());
+            let n_shape_c: &mut [usize] = try!(try!(shape_c.native_memory_mut(&dev)).try_as_mut_slice());
+            let n_c: &mut [T] = try!(try!(c.native_memory_mut(&dev)).try_as_mut_slice());
 
             let (mut bshape, iter_a, iter_b) = try!(broadcast::try_new_broadcast(n_shape_a, n_a, n_shape_b, n_b, 1));
             bshape.pop();

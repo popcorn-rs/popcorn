@@ -16,7 +16,7 @@ pub use hardware::Hardware;
 pub use framework::Framework;
 pub use memory::Memory;
 pub use device::Device;
-pub use buffer::{Buffer, BufferDevice};
+pub use buffer::{LockedBuffer, Buffer, BufferDevice};
 pub use vault::Vault;
 
 pub use frameworks::native;

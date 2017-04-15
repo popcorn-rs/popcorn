@@ -22,6 +22,9 @@ pub struct Inner<T> {
   data: UnsafeCell<T>
 }
 
+unsafe impl<T: Send> Send for Inner<T> {}
+unsafe impl<T: Send> Sync for Inner<T> {}
+
 #[derive(Debug)]
 pub struct VaultAcquire<T> {
   inner: Arc<Inner<T>>
