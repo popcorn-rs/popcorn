@@ -1,7 +1,6 @@
 use uuid::Uuid;
 use exec::*;
 use std::marker::PhantomData;
-use futures::Future;
 
 pub struct Placeholder<T: Send + Copy + 'static> {
   uid: Uuid,
@@ -19,36 +18,38 @@ impl<T: Send + Copy + 'static> Placeholder<T> {
 }
 
 impl<T: Send + Copy + 'static> Executable for Placeholder<T> {
-  type Base = T;
-
   fn uid(&self) -> &Uuid { &self.uid }
-  fn exec<'a>(&self, ctx: &'a mut Context) ->
-    Result<Box<Future<Item=LockedBuffer<Self::Base>,Error=buffer::Error>>,Error> {
-      ctx.get_input(self.uid())
-    }
+  fn exec<'a>(&self, _ctx: &'a mut Context) ->
+    Result<Vec<Box<Any>>, Error> { Err(Error::PlaceholderError) }
 }
 
 #[cfg(test)]
 mod test {
   use super::*;
   use popcorn::*;
+  use futures::Future;
+  use std::sync::Arc;
   use exec;
 
   #[test]
   fn test_placeholder_success() {
     let backend = native::Backend::default();
-    let buf = Buffer::<f32>::new(backend.device(), 2).unwrap().lock().and_then(|b| {
+    let buf = Buffer::<f32>::new(backend.device(), 2).unwrap();
+    let buff = buf.lock().and_then(|b| {
       b.sync_from_vec(vec![42.0, 32.1])
-    });
+    }).map(|_| buf);
 
-    let p = Placeholder::<f32>::new();
+    let p = Arc::new(Placeholder::<f32>::new());
 
     let mut ctx = exec::Context::new();
-    ctx.set_input(p.uid(), buf);
+    ctx.set_input(p.uid().clone(), buff);
+    let socket = Socket::<f32>::new(p.clone() as Arc<Executable>, 0);
 
-    let rv = p.exec(&mut ctx).unwrap().and_then(move |b| {
-      b.sync_to_vec()
-    }).map(|v| v).wait().unwrap();
+    let rv = socket.exec(&mut ctx).unwrap().
+      map_err(|se| se.clone()).
+      and_then(|b| {
+        b.lock().and_then(|b| b.sync_to_vec())
+      }).map(|v| v).wait().unwrap();
 
     assert_eq!(rv, vec![42.0, 32.1]);
   }
