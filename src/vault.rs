@@ -115,3 +115,11 @@ impl<T> Drop for VaultAcquired<T> {
   }
 }
 
+impl<T> From<VaultAcquired<T>> for Vault<T> {
+  fn from(va: VaultAcquired<T>) -> Vault<T> {
+    Vault {
+      inner: va.inner.clone()
+    }
+  }
+}
+

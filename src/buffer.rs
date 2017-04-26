@@ -24,6 +24,11 @@ impl<'a> From<&'a native::Device> for BufferDevice {
   fn from(dev: &'a native::Device) -> BufferDevice { BufferDevice::Native(dev.clone()) }
 }
 
+#[cfg(feature = "native")]
+impl From<native::Memory> for BufferMemory {
+  fn from(mem: native::Memory) -> BufferMemory { BufferMemory::Native(mem) }
+}
+
 #[derive(Debug)]
 pub enum BufferMemory {
   #[cfg(feature = "native")]
@@ -47,17 +52,17 @@ impl From<native::Error> for Error {
 }
 
 #[derive(Debug)]
-pub struct LockedBuffer<T: Copy + Sized + Send + 'static> {
+pub struct LockedBuffer<T> {
   raw: VaultAcquired<RawBuffer<T>>
 }
 
 #[derive(Debug, Clone)]
-pub struct Buffer<T: Copy + Sized + Send + 'static> {
+pub struct Buffer<T> {
   raw: Vault<RawBuffer<T>>
 }
 
 #[derive(Debug)]
-pub struct RawBuffer<T: Copy + Sized + Send + 'static> {
+pub struct RawBuffer<T> {
   size: usize,
   copies: HashMap<BufferDevice, BufferMemory>,
   latest_device: BufferDevice,
@@ -65,13 +70,13 @@ pub struct RawBuffer<T: Copy + Sized + Send + 'static> {
   _pd: PhantomData<T>,
 }
 
-impl<T: Send + Copy + Sized + 'static> Deref for LockedBuffer<T> {
+impl<T> Deref for LockedBuffer<T> {
   type Target = RawBuffer<T>;
 
   fn deref(&self) -> &RawBuffer<T> { &self.raw }
 }
 
-impl<T: Send + Copy + Sized + 'static> DerefMut for LockedBuffer<T> {
+impl<T> DerefMut for LockedBuffer<T> {
   fn deref_mut(&mut self) -> &mut RawBuffer<T> { &mut self.raw }
 }
 
@@ -84,6 +89,23 @@ impl<T: Send + Copy + Sized + 'static> RawBuffer<T> {
 
     Ok(RawBuffer {
       size: size,
+      copies: copies,
+      latest_device: bdev,
+      _pd: PhantomData
+    })
+  }
+
+  #[cfg(feature = "native")]
+  pub fn from_vec_native(dev: &native::Device, vec: Vec<T>) -> Result<RawBuffer<T>, Error> {
+    let bdev: BufferDevice = dev.into();
+    let mut copies = HashMap::new();
+    let mut mem = try!(dev.alloc_memory(vec.len() * mem::size_of::<T>()));
+    try!(mem.copy_from(&vec));
+    let copy = BufferMemory::Native(mem);
+    copies.insert(bdev.clone(), copy);
+
+    Ok(RawBuffer {
+      size: vec.len(),
       copies: copies,
       latest_device: bdev,
       _pd: PhantomData
@@ -123,6 +145,10 @@ impl<T: Send + Copy + Sized + 'static> RawBuffer<T> {
       },
       None => Err(Error::InvalidDevice)
     }
+  }
+
+  pub fn size(&self) -> usize {
+    self.size
   }
 }
 
@@ -185,10 +211,34 @@ impl<T: Send + Copy + Sized + 'static> LockedBuffer<T> {
   }
 }
 
+impl<T> From<RawBuffer<T>> for Buffer<T> {
+  fn from(raw: RawBuffer<T>) -> Buffer<T> {
+    let vault_raw = Vault::new(raw);
+
+    Buffer {
+      raw: vault_raw
+    }
+  }
+}
+
+impl<T> From<LockedBuffer<T>> for Buffer<T> {
+  fn from(locked: LockedBuffer<T>) -> Buffer<T> {
+    Buffer {
+      raw: locked.raw.into()
+    }
+  }
+}
+
 impl<T: Send + Copy + Sized + 'static> Buffer<T> {
   pub fn new<D: Into<BufferDevice>>(dev: D, size: usize) -> Result<Buffer<T>, Error> {
     let raw = try!(RawBuffer::new(dev, size));
-    Ok(Buffer { raw: raw.into() })
+    Ok(raw.into())
+  }
+
+  #[cfg(feature = "native")]
+  pub fn from_vec_native(dev: &native::Device, vec: Vec<T>) -> Result<Buffer<T>, Error> {
+    let raw = try!(RawBuffer::from_vec_native(dev, vec));
+    Ok(raw.into())
   }
 
   pub fn lock(&self) -> Box<Future<Item=LockedBuffer<T>,Error=Error>> {

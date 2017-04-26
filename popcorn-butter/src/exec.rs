@@ -29,14 +29,14 @@ pub trait Executable {
   fn exec<'a>(&self, ctx: &'a mut Context) -> Result<Vec<Box<Any>>, Error>;
 }
 
-pub struct Socket<Base: Send + Sized + Copy + 'static> {
+pub struct Socket<Base> {
   executable: Arc<Executable>,
   index: usize,
 
   _pd: PhantomData<Base>
 }
 
-impl<Base: Send + Sized + Copy + 'static> Socket<Base> {
+impl<Base: 'static> Socket<Base> {
   pub fn new(e: Arc<Executable>, index: usize) -> Socket<Base> {
     Socket {
       executable: e,
@@ -67,9 +67,9 @@ impl Context {
     Ok(())
   }
 
-  pub fn try_caching<Base: Send + Sized + Copy + 'static>(&mut self,
-                                                          e: &Executable,
-                                                          index: usize) -> Result<SBBF<Base>, Error> {
+  pub fn try_caching<Base: 'static>(&mut self,
+                                    e: &Executable,
+                                    index: usize) -> Result<SBBF<Base>, Error> {
     try!(self.cache_executable(e));
 
     self.cache.get(e.uid()).and_then(|b| b.get(index)).and_then(|b| {
@@ -77,7 +77,7 @@ impl Context {
     }).unwrap_or_else(|| Err(Error::NoSuchElement))
   }
 
-  pub fn set_input<Base: Send + Copy + 'static,
+  pub fn set_input<Base: 'static,
   B: IntoFuture<Item=Buffer<Base>,Error=buffer::Error> + 'static>(&mut self,
                                                                   uid: Uuid,
                                                                   buf: B) -> &mut Self {

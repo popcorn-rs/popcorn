@@ -2,13 +2,13 @@ use uuid::Uuid;
 use exec::*;
 use std::marker::PhantomData;
 
-pub struct Placeholder<T: Send + Copy + 'static> {
+pub struct Placeholder<T> {
   uid: Uuid,
 
   _pd: PhantomData<T>
 }
 
-impl<T: Send + Copy + 'static> Placeholder<T> {
+impl<T> Placeholder<T> {
   pub fn new() -> Placeholder<T> {
     Placeholder {
       uid: Uuid::new_v4(),
@@ -17,7 +17,7 @@ impl<T: Send + Copy + 'static> Placeholder<T> {
   }
 }
 
-impl<T: Send + Copy + 'static> Executable for Placeholder<T> {
+impl<T> Executable for Placeholder<T> {
   fn uid(&self) -> &Uuid { &self.uid }
   fn exec<'a>(&self, _ctx: &'a mut Context) ->
     Result<Vec<Box<Any>>, Error> { Err(Error::PlaceholderError) }

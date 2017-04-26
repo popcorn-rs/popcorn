@@ -1,56 +1,62 @@
 use uuid::Uuid;
 use exec::*;
-use std::marker::PhantomData;
 use futures::Future;
 
-pub struct Dot<T: Send + Copy + 'static> {
-  uid: Uuid,
+#[cfg(feature = "native")]
+pub mod native {
+  use super::*;
+  use popcorn::Backend;
+  use popcorn::native;
+  use popcorn_blas::frameworks::native::core_ops;
+  use popcorn_blas::*;
+  use std::cmp;
 
-  _pd: PhantomData<T>
-}
+  pub struct Dot<T> {
+    uid: Uuid,
+    shape_a: Buffer<usize>,
+    a: Socket<T>,
+    shape_b: Buffer<usize>,
+    b: Socket<T>,
+    backend: native::Backend
+  }
 
-impl<T: Send + Copy + 'static> Placeholder<T> {
-  pub fn new() -> Placeholder<T> {
-    Placeholder {
-      uid: Uuid::new_v4(),
-      _pd: PhantomData { }
+  impl<T: core_ops::Dot> Dot<T> {
+    pub fn new(shape_a: Vec<usize>,
+               a: Socket<T>,
+               shape_b: Vec<usize>,
+               b: Socket<T>,
+               backend: native::Backend) -> Result<Dot<T>, buffer::Error> {
+      let b_shape_a = try!(Buffer::from_vec_native(backend.device(), shape_a));
+      let b_shape_b = try!(Buffer::from_vec_native(backend.device(), shape_b));
+
+      Ok(Dot {
+        uid: Uuid::new_v4(),
+        shape_a: b_shape_a,
+        a: a,
+        shape_b: b_shape_b,
+        b: b,
+        backend: backend
+      })
     }
   }
-}
 
-impl<T: Send + Copy + 'static> Executable for Placeholder<T> {
-  type Base = T;
+  impl<T: 'static> Executable for Dot<T> {
+    fn uid(&self) -> &Uuid { &self.uid }
 
-  fn uid(&self) -> &Uuid { &self.uid }
-  fn exec<'a>(&self, ctx: &'a mut Context) ->
-    Result<Box<Future<Item=LockedBuffer<Self::Base>,Error=buffer::Error>>,Error> {
-      ctx.get_input(self.uid())
-    }
-}
+    fn exec<'a>(&self, ctx: &'a mut Context) ->
+      Result<Vec<Box<Any>>, Error> {
+        let sar = self.shape_a.lock();
+        let sbr = self.shape_b.lock();
+        let ar = try!(self.a.exec(ctx));
+        let br = try!(self.b.exec(ctx));
+        let backend = self.backend().clone();
 
-#[cfg(test)]
-mod test {
-  use super::*;
-  use popcorn::*;
-  use exec;
+        ar.join(br).join(sar.join(sbr)).and_then(move |((a, b), (sa, sb))| {
+          let (sc, c) = backend.bcast_dot(sa, a, sb, b);
+        });
 
-  #[test]
-  fn test_placeholder_success() {
-    let backend = native::Backend::default();
-    let buf = Buffer::<f32>::new(backend.device(), 2).unwrap().lock().and_then(|b| {
-      b.sync_from_vec(vec![42.0, 32.1])
-    });
-
-    let p = Placeholder::<f32>::new();
-
-    let mut ctx = exec::Context::new();
-    ctx.set_input(p.uid(), buf);
-
-    let rv = p.exec(&mut ctx).unwrap().and_then(move |b| {
-      b.sync_to_vec()
-    }).map(|v| v).wait().unwrap();
-
-    assert_eq!(rv, vec![42.0, 32.1]);
+        Err(Error::PlaceholderError)
+      }
   }
 }
 
