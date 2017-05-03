@@ -229,10 +229,23 @@ impl<T> From<LockedBuffer<T>> for Buffer<T> {
   }
 }
 
+impl<T> From<VaultAcquired<RawBuffer<T>>> for LockedBuffer<T> {
+  fn from(locked: VaultAcquired<RawBuffer<T>>) -> LockedBuffer<T> {
+    LockedBuffer {
+      raw: locked
+    }
+  }
+}
+
 impl<T: Send + Copy + Sized + 'static> Buffer<T> {
   pub fn new<D: Into<BufferDevice>>(dev: D, size: usize) -> Result<Buffer<T>, Error> {
     let raw = try!(RawBuffer::new(dev, size));
     Ok(raw.into())
+  }
+
+  #[cfg(feature = "native")]
+  pub fn with_capacity_native(dev: &native::Device, capacity: usize) -> Result<Buffer<T>, Error> {
+    Self::new(dev, capacity)
   }
 
   #[cfg(feature = "native")]
@@ -242,8 +255,12 @@ impl<T: Send + Copy + Sized + 'static> Buffer<T> {
   }
 
   pub fn lock(&self) -> Box<Future<Item=LockedBuffer<T>,Error=Error>> {
-    Box::new(self.raw.acquire().map(|raw| LockedBuffer {
+    Box::new(self.raw.lock().map(|raw| LockedBuffer {
       raw: raw
     }).map_err(|_| Error::InvalidLock))
+  }
+
+  pub fn try_lock(&self) -> Result<LockedBuffer<T>,Error> {
+    self.raw.try_lock().map(|raw| raw.into()).map_err(|_| Error::InvalidLock)
   }
 }

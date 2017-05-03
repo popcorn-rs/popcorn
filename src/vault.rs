@@ -59,9 +59,22 @@ impl<T> Vault<T> {
     }
   }
 
-  pub fn acquire(&self) -> VaultAcquire<T> {
+  pub fn lock(&self) -> VaultAcquire<T> {
     VaultAcquire {
       inner: self.inner.clone()
+    }
+  }
+
+  pub fn try_lock(&self) -> Result<VaultAcquired<T>, ()> {
+    let mut lock = self.inner.lock.lock();
+
+    if !lock.locked {
+      lock.locked = true;
+      Ok(VaultAcquired {
+        inner: self.inner.clone()
+      })
+    } else {
+      Err(())
     }
   }
 }
