@@ -1,3 +1,9 @@
+//! Popcorn provides a simple, unified framework for executing
+//! non-blocking operations in parallel across multiple devices.
+//!
+//! The initial targeted devices are CPU, CUDA/HIP and Vulkan to
+//! allow for maximum speed and portability.
+
 extern crate futures;
 extern crate futures_cpupool;
 extern crate spin;
