@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use std::fmt;
 use super::device::CpuDevice;
+use super::convert;
 use super::work;
 use device::DeviceRef;
-use event::Event;
+use event::{self, Event};
 
 /// An event that is occurring on a `CpuDevice`.
 #[derive(Debug, Clone)]
@@ -20,6 +21,7 @@ struct Inner {
 }
 
 impl CpuEvent {
+  /// Create a CpuEvent with a device and a `work::Event`.
   pub fn new(device: CpuDevice,
              work_event: work::Event) -> CpuEvent {
     CpuEvent {
@@ -38,20 +40,27 @@ impl Event for CpuEvent {
     self.inner.device.clone().into()
   }
 
-  fn event_callback(&self, f: Box<Fn() + Send + 'static>) -> Box<Event> {
+  fn event_callback(&self, f: event::CallbackFn) -> Box<Event> {
     let event = self.inner.device.create_event();
     let box_event = Box::new(event.clone()) as Box<Event>;
 
-    self.inner.work_event.callback(move || {
-      f();
-      event.inner.work_event.complete();
+    self.inner.work_event.callback(move |r| {
+      let nr = convert::event_result_to_work(f(convert::work_result_to_event(r)));
+      event.inner.work_event.complete(nr);
     });
 
     box_event
   }
 
-  fn callback(&self, f: Box<Fn() + Send + 'static>) {
-    self.inner.work_event.callback_box(f)
+  fn callback(&self, f: event::CallbackFn) {
+    let callback = Box::new(move |r| {
+      match f(convert::work_result_to_event(r)) {
+        Ok(()) => { },
+        Err(_) => { }
+      }
+    }) as work::WorkFn;
+
+    self.inner.work_event.callback_box(callback)
   }
 }
 

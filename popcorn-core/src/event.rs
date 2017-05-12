@@ -1,4 +1,13 @@
+use std::result;
 use device::DeviceRef;
+
+#[derive(Debug, Clone)]
+pub enum Error {
+  Custom(String)
+}
+
+pub type Result = result::Result<(), Error>;
+pub type CallbackFn = Box<Fn(Result) -> Result + Send + 'static>;
 
 /// Trait for events occurring on a device.
 /// All events have a unique `usize` identifier and
@@ -13,8 +22,8 @@ pub trait Event {
 
   /// Register a callback with an event for
   /// when it completes.
-  fn event_callback(&self, f: Box<Fn() + Send + 'static>) -> Box<Event>;
+  fn event_callback(&self, f: CallbackFn) -> Box<Event>;
 
   /// Register a callback without an event.
-  fn callback(&self, f: Box<Fn() + Send + 'static>);
+  fn callback(&self, f: CallbackFn);
 }

@@ -1,15 +1,24 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
+use std::result;
 use std::fmt;
 use crossbeam::sync::MsQueue;
 use spin;
+
+#[derive(Debug, Clone)]
+pub enum Error {
+  Custom(String)
+}
+
+pub type Result = result::Result<(), Error>;
+pub type WorkFn = Box<Fn(Result) + Send + 'static>;
 
 /// Enum for inputs into a worker thread
 ///   Run - contains a function to execute on the worker pool
 ///   Close - shutdown the worker
 pub enum WorkItem {
-  Run(Box<Fn() -> () + Send>),
+  Run(WorkFn, Result),
   Close
 }
 
@@ -40,7 +49,7 @@ struct EventInner {
   worker_pool: WorkerPool,
 
   /// List of callbacks to execute when this event triggers
-  callbacks: Vec<Box<Fn() + Send + 'static>>
+  callbacks: Vec<WorkFn>
 }
 
 /// Worker pool of threads that can perform work.
@@ -88,18 +97,18 @@ impl Event {
   /// The only guarantee is that a callback will be queued onto
   /// the `WorkerPool` and processed at some later point in time.
   pub fn callback<F>(&self, callback: F)
-    where F: Fn() + Send + 'static {
+    where F: Fn(Result) + Send + 'static {
       self.callback_box(Box::new(callback))
     }
 
-  pub fn callback_box(&self, f: Box<Fn() + Send + 'static>) {
+  pub fn callback_box(&self, f: WorkFn) {
       // Acquire lock to inner data
       let mut guard = self.inner.lock();
 
       if guard.completed {
         // This event has already completed.
         // Immediately queue the callback.
-        guard.worker_pool.spawn_box_fn(f)
+        guard.worker_pool.spawn_box_fn(f, Ok(()))
       } else {
         // This event has not completed.
         // Queue the callback on the event
@@ -111,7 +120,7 @@ impl Event {
   ///
   /// If the event has already been completed,
   /// this operation does nothing and returns false.
-  pub fn complete(&self) -> bool {
+  pub fn complete(&self, result: Result) -> bool {
     let mut guard = self.inner.lock();
 
     if guard.completed {
@@ -125,7 +134,7 @@ impl Event {
 
       // Queue all callbacks on the WorkerPool
       for callback in guard.callbacks.drain(0..len) {
-        worker_pool.spawn_box_fn(callback)
+        worker_pool.spawn_box_fn(callback, result.clone())
       }
 
       true
@@ -158,8 +167,8 @@ impl WorkerPool {
           loop {
             // This will block until a work item is ready
             match q.pop() {
-              WorkItem::Run(f) => {
-                f()
+              WorkItem::Run(f, r) => {
+                f(r)
               },
               WorkItem::Close => { break; }
             }
@@ -178,8 +187,9 @@ impl WorkerPool {
 
   /// Execute a function on a thread in the worker pool.
   pub fn spawn_box_fn(&self,
-                      f: Box<Fn() + Send + 'static>) {
-    self.inner.queue.push(WorkItem::Run(f))
+                      f: WorkFn,
+                      r: Result) {
+    self.inner.queue.push(WorkItem::Run(f, r))
   }
 
   /// Create an `Event` driven by this `WorkerPool`
