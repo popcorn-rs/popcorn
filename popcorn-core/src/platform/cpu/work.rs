@@ -1,8 +1,9 @@
 use std::sync::Arc;
-use std::ops::Deref;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
-use crossbeam::sync::MsQueue;
 use std::fmt;
+use crossbeam::sync::MsQueue;
+use spin;
 
 /// Enum for inputs into a worker thread
 ///   Run - contains a function to execute on the worker pool
@@ -12,21 +13,124 @@ pub enum WorkItem {
   Close
 }
 
+/// Represents an event that can have attached callbacks.
+///
+/// When an event is triggered, its list of callbacks
+/// will be sent to the associated `WorkerPool` for execution.
+#[derive(Clone)]
+pub struct Event {
+  /// Reference to inner data guarded by a spin lock
+  inner: Arc<spin::Mutex<EventInner>>
+}
+
+/// Inner data for an event. This serves to functions:
+///   1. Provide a shareable data structure that can be
+///      referenced buy multiple threads.
+///   2. Provide a spin lock, which is a desirable lock
+///      because all transformations and accesses take
+///      only a few operations.
+struct EventInner {
+  /// Unique id for this event in the `WorkerPool`
+  id: usize,
+
+  /// Whether or not this event has completed
+  completed: bool,
+
+  /// `WorkerPool` for executing callbacks
+  worker_pool: WorkerPool,
+
+  /// List of callbacks to execute when this event triggers
+  callbacks: Vec<Box<Fn() + Send + 'static>>
+}
+
 /// Worker pool of threads that can perform work.
 /// Communication occurs through a Michael-Scott
 /// queue for maximum efficiency.
 #[derive(Clone)]
 pub struct WorkerPool {
   /// Inner queue and worker threads
-  inner: Arc<Inner>
+  inner: Arc<WorkerPoolInner>
 }
 
-struct Inner {
+struct WorkerPoolInner {
+  /// Current `Event` id
+  current_event_id: AtomicUsize,
+
   /// Michael-Scott queue for sending work items to the threads
   queue: Arc<MsQueue<WorkItem>>,
 
   /// `JoinHandle`s for all of the worker threads
   workers: Vec<JoinHandle<()>>
+}
+
+impl Event {
+  /// Get the id of this event.
+  ///
+  /// ID's are unique to the `WorkerPool` on
+  /// which the event was created.
+  pub fn id(&self) -> usize {
+    let guard = self.inner.lock();
+    guard.id
+  }
+
+  /// Register a callback for when this event completes.
+  ///
+  /// If the event is already completed, then this
+  /// callback will be immediately queued on the `WorkerPool`
+  /// of this event.
+  ///
+  /// If the event has not yet fired, then it will be queued
+  /// on this event's list of callbacks. When the event is
+  /// completed with a call to `complete`, then all of the
+  /// callbacks will be queued on the `WorkerPool`.
+  ///
+  /// There are no guarantees about ordering of event callbacks.
+  /// The only guarantee is that a callback will be queued onto
+  /// the `WorkerPool` and processed at some later point in time.
+  pub fn callback<F>(&self, callback: F)
+    where F: Fn() + Send + 'static {
+      self.callback_box(Box::new(callback))
+    }
+
+  pub fn callback_box(&self, f: Box<Fn() + Send + 'static>) {
+      // Acquire lock to inner data
+      let mut guard = self.inner.lock();
+
+      if guard.completed {
+        // This event has already completed.
+        // Immediately queue the callback.
+        guard.worker_pool.spawn_box_fn(f)
+      } else {
+        // This event has not completed.
+        // Queue the callback on the event
+        guard.callbacks.push(f)
+      }
+  }
+
+  /// Complete this event.
+  ///
+  /// If the event has already been completed,
+  /// this operation does nothing and returns false.
+  pub fn complete(&self) -> bool {
+    let mut guard = self.inner.lock();
+
+    if guard.completed {
+      false
+    } else {
+      // Mark the event as completed
+      guard.completed = true;
+
+      let len = guard.callbacks.len();
+      let worker_pool = guard.worker_pool.clone();
+
+      // Queue all callbacks on the WorkerPool
+      for callback in guard.callbacks.drain(0..len) {
+        worker_pool.spawn_box_fn(callback)
+      }
+
+      true
+    }
+  }
 }
 
 impl fmt::Debug for WorkerPool {
@@ -64,7 +168,8 @@ impl WorkerPool {
     }).collect();
 
     WorkerPool {
-      inner: Arc::new(Inner {
+      inner: Arc::new(WorkerPoolInner {
+        current_event_id: AtomicUsize::new(0),
         queue: queue,
         workers: workers
       })
@@ -72,13 +177,29 @@ impl WorkerPool {
   }
 
   /// Execute a function on a thread in the worker pool.
-  pub fn spawn_box_fn(&self, f: Box<Fn() + Send + 'static>) {
+  pub fn spawn_box_fn(&self,
+                      f: Box<Fn() + Send + 'static>) {
     self.inner.queue.push(WorkItem::Run(f))
+  }
+
+  /// Create an `Event` driven by this `WorkerPool`
+  pub fn create_event(&self) -> Event {
+    // Fetch and increment the current_event_id
+    let id = self.inner.current_event_id.fetch_add(1, Ordering::SeqCst);
+
+    Event {
+      inner: Arc::new(spin::Mutex::new(EventInner {
+        id: id,
+        completed: false,
+        worker_pool: self.clone(),
+        callbacks: Vec::new()
+      }))
+    }
   }
 }
 
 /// Release all worker threads, do not wait to join.
-impl Drop for Inner {
+impl Drop for WorkerPoolInner {
   fn drop(&mut self) {
     let len = self.workers.len();
 

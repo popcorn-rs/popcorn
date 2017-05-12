@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ops::Deref;
 use uuid::Uuid;
 use device::Device;
@@ -19,20 +18,19 @@ pub struct Inner {
   /// Unique identifier for this device
   uid: Uuid,
 
-  /// Current event id
-  current_event_id: AtomicUsize,
-
   /// WorkerPool for handling callbacks
   worker_pool: WorkerPool
 }
 
 impl CpuDevice {
+  /// Create an event that can be triggered later.
   pub fn create_event(&self) -> CpuEvent {
-    let id = self.current_event_id.fetch_add(1, Ordering::SeqCst);
+    let work_event = self.inner.worker_pool.create_event();
 
-    CpuEvent::new(id, self.clone())
+    CpuEvent::new(self.clone(), work_event)
   }
 
+  /// Get the `WorkerPool` associated with this device
   pub fn worker_pool(&self) -> &WorkerPool { &self.worker_pool }
 }
 

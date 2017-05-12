@@ -1,88 +1,62 @@
 use std::sync::Arc;
 use std::fmt;
 use super::device::CpuDevice;
+use super::work;
 use device::DeviceRef;
 use event::Event;
-use spin;
 
 /// An event that is occurring on a `CpuDevice`.
 #[derive(Debug, Clone)]
 pub struct CpuEvent {
-  inner: Arc<spin::Mutex<Inner>>
+  inner: Arc<Inner>
 }
 
 struct Inner {
-  /// Unique identifier on CPU device
-  id: usize,
-
-  /// Whether or not this event has been completed
-  complete: bool,
-
-  /// CpuDevice responsible for this event
+  /// Device for this event
   device: CpuDevice,
 
-  /// List of callbacks for when this event triggers
-  callbacks: Vec<Box<Fn() + Send + 'static>>
+  /// Underlying event for the `WorkerPool`
+  work_event: work::Event
 }
 
 impl CpuEvent {
-  pub fn new(id: usize,
-             device: CpuDevice) -> CpuEvent {
+  pub fn new(device: CpuDevice,
+             work_event: work::Event) -> CpuEvent {
     CpuEvent {
-      inner: Arc::new(spin::Mutex::new(Inner {
-        id: id,
-        complete: false,
+      inner: Arc::new(Inner {
         device: device,
-        callbacks: Vec::new()
-      }))
+        work_event: work_event
+      })
     }
   }
-
-  pub fn complete(&self) {
-    // Acquire lock on our data
-    let mut guard = self.inner.lock();
-
-    // Check if this event is already complete
-    if !guard.complete {
-      guard.complete = true;
-      let len = guard.callbacks.len();
-      let pool = guard.device.worker_pool().clone();
-      for cb in guard.callbacks.drain(0..len) {
-        pool.spawn_box_fn(cb)
-      }
-    }
-  }
-
-  pub fn register_callback<F>(&self, f: F)
-    where F: Fn() + Send + 'static {
-      // Acquire guard lock
-      let mut guard = self.inner.lock();
-
-      // Check if this event is already complete
-      if guard.complete {
-        // Trigger callback immediately
-        guard.device.worker_pool().spawn_box_fn(Box::new(f))
-      } else {
-        // Queue callback for later
-        guard.callbacks.push(Box::new(f))
-      }
-    }
 }
 
 impl Event for CpuEvent {
-  fn event_id(&self) -> usize {
-    let guard = self.inner.lock();
-    guard.id
-  }
+  fn event_id(&self) -> usize { self.inner.work_event.id() }
 
   fn device(&self) -> DeviceRef {
-    let guard = self.inner.lock();
-    guard.device.clone().into()
+    self.inner.device.clone().into()
+  }
+
+  fn event_callback(&self, f: Box<Fn() + Send + 'static>) -> Box<Event> {
+    let event = self.inner.device.create_event();
+    let box_event = Box::new(event.clone()) as Box<Event>;
+
+    self.inner.work_event.callback(move || {
+      f();
+      event.inner.work_event.complete();
+    });
+
+    box_event
+  }
+
+  fn callback(&self, f: Box<Fn() + Send + 'static>) {
+    self.inner.work_event.callback_box(f)
   }
 }
 
 impl fmt::Debug for Inner {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    write!(f, "Inner {{ id: {}, device: {:?} }}", self.id, self.device)
+    write!(f, "Inner {{ id: {}, device: {:?} }}", self.work_event.id(), self.device)
   }
 }
