@@ -1,0 +1,28 @@
+[package]
+name = "popcorn-core"
+version = "0.1.0"
+authors = ["Hollin Wilkins <hollinrwilkins@gmail.com>"]
+description = "Popcorn Core: Core synchronization and execution engine"
+repository = "https://github.com/combust/popcorn"
+readme = "../README.md"
+keywords = ["ml", "tensor", "gpu"]
+license = "Apache-2.0"
+
+[features]
+default = ["native", "cuda", "opencl"]
+native = []
+cuda = []
+opencl = []
+
+[dependencies]
+mio = "0.6.7"
+slab = "0.3.0"
+crossbeam = "0.2"
+
+[dependencies.uuid]
+version = "0.4"
+features = ["v4"]
+
+[dependencies.spin]
+version = "0.4"
+default-features = false

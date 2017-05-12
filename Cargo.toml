@@ -23,4 +23,4 @@ cuda = []
 opencl = []
 
 [workspace]
-members = ["popcorn-blas", "popcorn-nn", "popcorn-butter"]
+members = ["popcorn-core", "popcorn-blas", "popcorn-nn", "popcorn-butter"]

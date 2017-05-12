@@ -2,7 +2,21 @@
 //! non-blocking operations in parallel across multiple devices.
 //!
 //! The initial targeted devices are CPU, CUDA/HIP and Vulkan to
-//! allow for maximum speed and portability.
+//! allow for maximum speed and portability. The [Futures-rs](https://github.com/alexcrichton/futures-rs)
+//! crate is used to execute operations in the correct order while
+//! still allowing for operations to execute in a parallel and
+//! non-blocking fashion.
+//!
+//! # Abstract
+//!
+//! # Project Goals
+//!
+//! 1. Run on any device making optimal use of hardware.
+//! 2. Execute extremely fast.
+//! 3. Take up as little memory as possible.
+//! 4. Support cutting-edge AI/ML algorithms.
+//!
+//! # Design
 
 extern crate futures;
 extern crate futures_cpupool;
