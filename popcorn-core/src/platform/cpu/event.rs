@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use std::fmt;
+use std::cell::Cell;
 use super::device::CpuDevice;
-use super::convert;
 use super::work;
 use device::DeviceRef;
 use event::{self, Event};
+use spin;
 
 /// An event that is occurring on a `CpuDevice`.
 #[derive(Debug, Clone)]
@@ -17,7 +18,10 @@ struct Inner {
   device: CpuDevice,
 
   /// Underlying event for the `WorkerPool`
-  work_event: work::Event
+  work_event: work::Event,
+
+  /// Result of this event
+  result: spin::Mutex<Cell<event::Result>>
 }
 
 impl CpuEvent {
@@ -27,7 +31,8 @@ impl CpuEvent {
     CpuEvent {
       inner: Arc::new(Inner {
         device: device,
-        work_event: work_event
+        work_event: work_event,
+        result: spin::Mutex::new(Cell::new(Err(event::Error::NotCompleted)))
       })
     }
   }
@@ -40,27 +45,24 @@ impl Event for CpuEvent {
     self.inner.device.clone().into()
   }
 
-  fn event_callback(&self, f: event::CallbackFn) -> Box<Event> {
-    let event = self.inner.device.create_event();
-    let box_event = Box::new(event.clone()) as Box<Event>;
-
-    self.inner.work_event.callback(move |r| {
-      let nr = convert::event_result_to_work(f(convert::work_result_to_event(r)));
-      event.inner.work_event.complete(nr);
-    });
-
-    box_event
-  }
-
   fn callback(&self, f: event::CallbackFn) {
-    let callback = Box::new(move |r| {
-      match f(convert::work_result_to_event(r)) {
-        Ok(()) => { },
-        Err(_) => { }
-      }
+    let event = self.clone();
+    let callback = Box::new(move || {
+      f(Box::new(event.clone()))
     }) as work::WorkFn;
 
     self.inner.work_event.callback_box(callback)
+  }
+
+  fn complete(&self, result: event::Result) {
+    let mut guard = self.inner.result.lock();
+    guard.set(result);
+    self.inner.work_event.complete();
+  }
+
+  fn result(&self) -> event::Result {
+    let guard = self.inner.result.lock();
+    guard.get().clone()
   }
 }
 

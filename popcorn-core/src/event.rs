@@ -1,13 +1,13 @@
 use std::result;
 use device::DeviceRef;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Error {
-  Custom(String)
+  NotCompleted
 }
 
 pub type Result = result::Result<(), Error>;
-pub type CallbackFn = Box<Fn(Result) -> Result + Send + 'static>;
+pub type CallbackFn = Box<Fn(Box<Event + Send + 'static>) + Send + 'static>;
 
 /// Trait for events occurring on a device.
 /// All events have a unique `usize` identifier and
@@ -20,10 +20,12 @@ pub trait Event {
   /// Device associated with this event
   fn device(&self) -> DeviceRef;
 
-  /// Register a callback with an event for
-  /// when it completes.
-  fn event_callback(&self, f: CallbackFn) -> Box<Event>;
-
   /// Register a callback without an event.
   fn callback(&self, f: CallbackFn);
+
+  /// Complete this event.
+  fn complete(&self, result: Result);
+
+  /// Get the result
+  fn result(&self) -> Result;
 }

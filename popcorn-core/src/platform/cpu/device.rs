@@ -5,6 +5,7 @@ use device::Device;
 use super::work::WorkerPool;
 use super::event::CpuEvent;
 use super::memory::CpuMemory;
+use event::Event;
 use memory::Memory;
 
 /// Organizes events and callbacks on a CPU. Event
