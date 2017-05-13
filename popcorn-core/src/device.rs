@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::ops::Deref;
 use uuid::Uuid;
+use memory::Memory;
+use event::Event;
 
 /// A reference to a device
 pub struct DeviceRef(Arc<Box<Device>>);
@@ -11,6 +13,14 @@ pub struct DeviceRef(Arc<Box<Device>>);
 pub trait Device {
   /// Unique identifier for this device
   fn device_id(&self) -> Uuid;
+
+  /// Create an event on this device
+  fn create_event(&self) -> Box<Event>;
+
+  /// Allocate memory on this device
+  fn allocate(&self,
+              size: usize,
+              element_size: usize) -> (Box<Memory>, Box<Event>);
 }
 
 /// Convenience conversion from a device into a reference

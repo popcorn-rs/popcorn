@@ -4,6 +4,8 @@ use uuid::Uuid;
 use device::Device;
 use super::work::WorkerPool;
 use super::event::CpuEvent;
+use super::memory::CpuMemory;
+use memory::Memory;
 
 /// Organizes events and callbacks on a CPU. Event
 /// callbacks and operations are performed using
@@ -24,7 +26,7 @@ pub struct Inner {
 
 impl CpuDevice {
   /// Create an event that can be triggered later.
-  pub fn create_event(&self) -> CpuEvent {
+  pub fn create_cpu_event(&self) -> CpuEvent {
     let work_event = self.inner.worker_pool.create_event();
 
     CpuEvent::new(self.clone(), work_event)
@@ -37,6 +39,20 @@ impl CpuDevice {
 impl Device for CpuDevice {
   fn device_id(&self) -> Uuid {
     self.uid.clone()
+  }
+
+  fn create_event(&self) -> Box<Event> {
+    Box::new(self.create_cpu_event())
+  }
+
+  fn allocate(&self,
+              size: usize,
+              element_size: usize) -> (Box<Memory>, Box<Event>) {
+    let event = self.create_cpu_event();
+    event.complete(Ok(()));
+    let memory = Box::new(CpuMemory::new()) as Box<Memory>;
+
+    (memory, Box::new(event))
   }
 }
 
